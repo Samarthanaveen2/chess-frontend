@@ -26,6 +26,7 @@ export default function App(){
   const [message, setMessage] = useState("");
   const [selectedSquare, setSelectedSquare] = useState(null);
   const [legalTargets, setLegalTargets] = useState([]); // squares like ['e4','d5']
+  const [drawOffer, setDrawOffer] = useState(false); // Track draw offer
   const chessClientRef = useRef(new Chess());
   const [boardWidth, setBoardWidth] = useState(520);
 
@@ -75,16 +76,24 @@ export default function App(){
       } else {
         setMessage(`Game Over: ${result}`);
       }
+      setDrawOffer(false); // Reset draw offer
     });
     socket.on('opponentLeft', () => {
       setMessage('Opponent left the room');
       setStatus('waiting');
+      setDrawOffer(false);
+    });
+    socket.on('drawOffered', () => {
+      setDrawOffer(true);
+      setMessage('Opponent offered a draw');
     });
 
     return () => {
       socket.off('connect'); socket.off('disconnect');
       socket.off('startGame'); socket.off('assignColor');
-      socket.off('updateBoard'); socket.off('timerUpdate'); socket.off('gameOver'); socket.off('opponentLeft');
+      socket.off('updateBoard'); socket.off('timerUpdate');
+      socket.off('gameOver'); socket.off('opponentLeft');
+      socket.off('drawOffered');
     };
   }, [color]);
 
@@ -107,13 +116,12 @@ export default function App(){
       setInRoom(true);
       setStatus('playing');
       setMessage('Joined room — game started');
+      setColor(res.color || 'b'); // Use server color if provided, else assume black
     });
   }
 
-  // Drag-drop handler
   function onPieceDrop(source, target) {
     if (!inRoom) return false;
-    // send move to server; server validates and broadcasts
     socket.emit('move', { code: room, from: source, to: target }, (response) => {
       if (response?.error) {
         setMessage(response.error);
@@ -122,9 +130,7 @@ export default function App(){
     return true;
   }
 
-  // Click handlers: select piece or move to target
   function onPieceClick(square) {
-    // show legal moves for piece on square
     const moves = chessClientRef.current.moves({ square, verbose: true });
     const targets = moves.map(m => m.to);
     setSelectedSquare(square);
@@ -132,17 +138,14 @@ export default function App(){
   }
 
   function onSquareClick(square) {
-    // if user clicks on a highlighted target -> make move
     if (selectedSquare && legalTargets.includes(square)) {
       socket.emit('move', { code: room, from: selectedSquare, to: square }, (response) => {
         if (response?.error) setMessage(response.error);
       });
-      // clear selection; server will send updateBoard
       setSelectedSquare(null);
       setLegalTargets([]);
       return;
     }
-    // otherwise if clicking on a piece of your color, select it
     const piece = chessClientRef.current.get(square);
     if (piece && ((piece.color === 'w' && color === 'w') || (piece.color === 'b' && color === 'b'))) {
       onPieceClick(square);
@@ -158,6 +161,18 @@ export default function App(){
 
   function handleOfferDraw(){
     socket.emit('offerDraw', { code: room });
+    setMessage('Draw offered');
+  }
+
+  function handleAcceptDraw(){
+    socket.emit('acceptDraw', { code: room });
+    setDrawOffer(false);
+  }
+
+  function handleRejectDraw(){
+    socket.emit('rejectDraw', { code: room });
+    setDrawOffer(false);
+    setMessage('Draw offer rejected');
   }
 
   function leaveRoom(){
@@ -169,13 +184,13 @@ export default function App(){
     setMessage('Left room');
     setSelectedSquare(null);
     setLegalTargets([]);
+    setDrawOffer(false);
   }
 
   const myOrientation = color === 'w' ? 'white' : 'black';
   const myTimer = color === 'w' ? timers.w : timers.b;
   const oppTimer = color === 'w' ? timers.b : timers.w;
 
-  // create square styles for highlighting legal moves & selected square
   const customSquareStyles = {};
   if (selectedSquare) {
     customSquareStyles[selectedSquare] = { background: 'rgba(88,214,141,0.35)' };
@@ -247,6 +262,12 @@ export default function App(){
                 <div style={{display:'flex', gap:8}}>
                   <button className="btn small" onClick={handleResign}>Resign</button>
                   <button className="btn small ghost" onClick={handleOfferDraw}>Offer Draw</button>
+                  {drawOffer && (
+                    <>
+                      <button className="btn small" onClick={handleAcceptDraw}>Accept Draw</button>
+                      <button className="btn small ghost" onClick={handleRejectDraw}>Reject Draw</button>
+                    </>
+                  )}
                 </div>
                 <div>
                   <button className="btn small ghost" onClick={leaveRoom}>Leave</button>
@@ -313,7 +334,6 @@ export default function App(){
             </div>
           </div>
         </div>
-
       </div>
     </div>
   );
