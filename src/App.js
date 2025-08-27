@@ -3,7 +3,6 @@ import { Chessboard } from "react-chessboard";
 import { io } from "socket.io-client";
 import { Chess } from "chess.js";
 
-// 🔴 change to your backend URL
 const BACKEND = "https://chess-backend-lig8.onrender.com";
 const socket = io(BACKEND, { transports: ['websocket', 'polling'] });
 
@@ -19,14 +18,14 @@ export default function App(){
   const [fen, setFen] = useState("start");
   const [room, setRoom] = useState("");
   const [inRoom, setInRoom] = useState(false);
-  const [color, setColor] = useState('w'); // my color
-  const [status, setStatus] = useState("idle"); // idle, waiting, playing, finished
+  const [color, setColor] = useState('w');
+  const [status, setStatus] = useState("idle");
   const [timers, setTimers] = useState({ w: 300, b: 300 });
   const [moveHistory, setMoveHistory] = useState([]);
   const [message, setMessage] = useState("");
   const [selectedSquare, setSelectedSquare] = useState(null);
-  const [legalTargets, setLegalTargets] = useState([]); // squares like ['e4','d5']
-  const [drawOffer, setDrawOffer] = useState(false); // Track draw offer
+  const [legalTargets, setLegalTargets] = useState([]);
+  const [drawOffer, setDrawOffer] = useState(false);
   const chessClientRef = useRef(new Chess());
   const [boardWidth, setBoardWidth] = useState(520);
 
@@ -34,14 +33,20 @@ export default function App(){
     function resize(){ setBoardWidth(Math.min(520, window.innerWidth - 320)); }
     resize();
     window.addEventListener('resize', resize);
-    return ()=> window.removeEventListener('resize', resize);
+    return () => window.removeEventListener('resize', resize);
   }, []);
 
   useEffect(() => {
-    socket.on('connect', () => setConnected(true));
-    socket.on('disconnect', ()=> setConnected(false));
-
+    socket.on('connect', () => {
+      console.log('Socket connected');
+      setConnected(true);
+    });
+    socket.on('disconnect', () => {
+      console.log('Socket disconnected');
+      setConnected(false);
+    });
     socket.on('startGame', ({ fen }) => {
+      console.log('startGame received:', fen);
       setFen(fen);
       chessClientRef.current = new Chess(fen);
       setStatus('playing');
@@ -49,9 +54,11 @@ export default function App(){
       setMoveHistory([]);
     });
     socket.on('assignColor', ({ color }) => {
+      console.log('assignColor received:', color);
       setColor(color);
     });
     socket.on('updateBoard', ({ fen, move, history }) => {
+      console.log('updateBoard received:', { fen, move, history });
       setFen(fen);
       chessClientRef.current = new Chess(fen);
       if (history) setMoveHistory(history);
@@ -60,9 +67,11 @@ export default function App(){
       setLegalTargets([]);
     });
     socket.on('timerUpdate', ({ timers }) => {
+      console.log('timerUpdate received:', timers);
       setTimers(timers);
     });
     socket.on('gameOver', (payload) => {
+      console.log('gameOver received:', payload);
       setStatus('finished');
       const { result, winner } = payload;
       if (result === 'checkmate') {
@@ -76,29 +85,37 @@ export default function App(){
       } else {
         setMessage(`Game Over: ${result}`);
       }
-      setDrawOffer(false); // Reset draw offer
+      setDrawOffer(false);
     });
     socket.on('opponentLeft', () => {
+      console.log('opponentLeft received');
       setMessage('Opponent left the room');
       setStatus('waiting');
       setDrawOffer(false);
     });
     socket.on('drawOffered', () => {
+      console.log('drawOffered received');
       setDrawOffer(true);
       setMessage('Opponent offered a draw');
+      setTimeout(() => setDrawOffer(false), 30000); // Reset after 30s if no response
     });
 
     return () => {
-      socket.off('connect'); socket.off('disconnect');
-      socket.off('startGame'); socket.off('assignColor');
-      socket.off('updateBoard'); socket.off('timerUpdate');
-      socket.off('gameOver'); socket.off('opponentLeft');
+      socket.off('connect');
+      socket.off('disconnect');
+      socket.off('startGame');
+      socket.off('assignColor');
+      socket.off('updateBoard');
+      socket.off('timerUpdate');
+      socket.off('gameOver');
+      socket.off('opponentLeft');
       socket.off('drawOffered');
     };
   }, [color]);
 
   function handleCreate(){
     socket.emit('createRoom', null, ({ code, fen, color }) => {
+      console.log('createRoom response:', { code, fen, color });
       setRoom(code);
       setFen(fen);
       chessClientRef.current = new Chess(fen);
@@ -112,20 +129,20 @@ export default function App(){
   function handleJoin(){
     if (!room) { alert('Enter room code'); return; }
     socket.emit('joinRoom', { code: room }, (res) => {
+      console.log('joinRoom response:', res);
       if (res?.error) { alert(res.error); return; }
       setInRoom(true);
       setStatus('playing');
       setMessage('Joined room — game started');
-      setColor(res.color || 'b'); // Use server color if provided, else assume black
+      setColor('b'); // Force black for joiner
     });
   }
 
   function onPieceDrop(source, target) {
     if (!inRoom) return false;
     socket.emit('move', { code: room, from: source, to: target }, (response) => {
-      if (response?.error) {
-        setMessage(response.error);
-      }
+      console.log('move response:', response);
+      if (response?.error) setMessage(response.error);
     });
     return true;
   }
@@ -140,6 +157,7 @@ export default function App(){
   function onSquareClick(square) {
     if (selectedSquare && legalTargets.includes(square)) {
       socket.emit('move', { code: room, from: selectedSquare, to: square }, (response) => {
+        console.log('move response:', response);
         if (response?.error) setMessage(response.error);
       });
       setSelectedSquare(null);
@@ -147,7 +165,8 @@ export default function App(){
       return;
     }
     const piece = chessClientRef.current.get(square);
-    if (piece && ((piece.color === 'w' && color === 'w') || (piece.color === 'b' && color === 'b'))) {
+    const currentTurn = chessClientRef.current.turn();
+    if (piece && piece.color === currentTurn && (piece.color === color || currentTurn === color)) {
       onPieceClick(square);
     } else {
       setSelectedSquare(null);
@@ -156,23 +175,32 @@ export default function App(){
   }
 
   function handleResign(){
-    socket.emit('resign', { code: room });
+    socket.emit('resign', { code: room }, () => {
+      console.log('resign emitted');
+      setMessage('Resigned — waiting for server');
+    });
   }
 
   function handleOfferDraw(){
-    socket.emit('offerDraw', { code: room });
-    setMessage('Draw offered');
+    socket.emit('offerDraw', { code: room }, () => {
+      console.log('offerDraw emitted');
+      setMessage('Draw offered');
+    });
   }
 
   function handleAcceptDraw(){
-    socket.emit('acceptDraw', { code: room });
-    setDrawOffer(false);
+    socket.emit('acceptDraw', { code: room }, () => {
+      console.log('acceptDraw emitted');
+      setDrawOffer(false);
+    });
   }
 
   function handleRejectDraw(){
-    socket.emit('rejectDraw', { code: room });
-    setDrawOffer(false);
-    setMessage('Draw offer rejected');
+    socket.emit('rejectDraw', { code: room }, () => {
+      console.log('rejectDraw emitted');
+      setDrawOffer(false);
+      setMessage('Draw offer rejected');
+    });
   }
 
   function leaveRoom(){
